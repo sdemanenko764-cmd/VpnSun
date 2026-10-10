@@ -129,9 +129,89 @@ jobs:
           git config user.name 'Sun VPN release automation'
           git config user.email 'sun-vpn-build@users.noreply.github.com'
           git add downloads
-          git commit -m "Publish Sun VPN $VERSION Android APK (built on ubuntu-latest, unsigned by Google Play)"
+          git diff --cached --quiet || git commit -m "Publish Sun VPN $VERSION Android APK (built on ubuntu-latest, not distributed by Google Play)"
           for attempt in 1 2 3 4 5; do
             git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && exit 0
             sleep $((attempt * 7))
           done
           echo "Could not push the APK"; exit 1
+
+  # Runs the same source on an Android emulator (hardware-accelerated) against a real
+  # Shadowsocks server on the runner: the VPN must carry traffic only while it is up.
+  # x86_64 debug build of the identical code (the release APK is arm64).
+  emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and unpack source archive
+        id: source
+        run: |
+          zip=$(ls downloads/Sun-VPN-*-source.zip | sed -E 's#.*/Sun-VPN-(.*)-source\.zip#\1 &#' | sort -V | tail -1 | cut -d' ' -f2)
+          expected=$(cut -d' ' -f1 "$zip.sha256")
+          actual=$(sha256sum "$zip" | cut -d' ' -f1)
+          [ "$actual" = "$expected" ] || { echo "Source archive SHA-256 mismatch"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/src"
+          unzip -q "$zip" -d "$RUNNER_TEMP/src"
+          echo "dir=$RUNNER_TEMP/src/Sun-VPN" >> "$GITHUB_OUTPUT"
+          chmod +x "$RUNNER_TEMP/src/Sun-VPN/src-tauri/gen/android/gradlew" "$RUNNER_TEMP/src/Sun-VPN/scripts/"*.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - name: Android SDK and NDK
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" "platform-tools" "platforms;android-35" "platforms;android-36" "build-tools;35.0.0" "ndk;28.0.13004108" > /dev/null
+          {
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            echo "ANDROID_SDK_ROOT=$ANDROID_HOME"
+            echo "NDK_HOME=$ANDROID_HOME/ndk/28.0.13004108"
+            echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.0.13004108"
+          } >> "$GITHUB_ENV"
+      - name: Build libbox
+        working-directory: ${{ steps.source.outputs.dir }}
+        run: ./scripts/build-libbox.sh
+      - name: Build x86_64 debug APK
+        working-directory: ${{ steps.source.outputs.dir }}
+        run: |
+          npm ci
+          sed -i 's/crate-type = \["rlib"\]/crate-type = ["staticlib", "cdylib", "rlib"]/' src-tauri/Cargo.toml
+          npx tauri android build --debug --apk --target x86_64 --ci
+          apk=$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
+          cp "$apk" "$RUNNER_TEMP/sun-vpn-debug.apk"
+      - name: Test configuration and server tool
+        working-directory: ${{ steps.source.outputs.dir }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/sb.tgz" https://github.com/SagerNet/sing-box/releases/download/v1.12.0/sing-box-1.12.0-linux-amd64.tar.gz
+          echo "f59b1253ae0143997cb46915af30d14a33431dcbd7e39edacfcde8d73050faaf  $RUNNER_TEMP/sb.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/sb.tgz" -C "$RUNNER_TEMP"
+          cargo run -q -p luma-core --example android_config -- "ss://$(printf 'aes-128-gcm:password' | base64 -w0)@10.0.2.2:8388#test" "$RUNNER_TEMP/session.json"
+          "$RUNNER_TEMP/sing-box-1.12.0-linux-amd64/sing-box" check -c "$RUNNER_TEMP/session.json"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: End-to-end test on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          working-directory: ${{ steps.source.outputs.dir }}
+          script: ./scripts/android-e2e.sh ${{ runner.temp }}/sun-vpn-debug.apk ${{ runner.temp }}/sing-box-1.12.0-linux-amd64/sing-box ${{ runner.temp }}/session.json
