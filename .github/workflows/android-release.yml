@@ -280,4 +280,5 @@ jobs:
           emulator-log: ${{ runner.temp }}/emu-logcat-29.txt
           api-level: '29'
       - name: Android 10 result
-        run: echo "Android 10 end-to-end outcome: ${{ steps.e2e29.outcome }}"
+        run: |
+          echo "Android 10 end-to-end outcome is ${{ steps.e2e29.outcome }}"
