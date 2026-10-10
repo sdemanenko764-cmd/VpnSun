@@ -16,14 +16,17 @@ inputs:
   emulator-log:
     description: File for the emulator-side guest log
     required: true
+  api-level:
+    description: Android API level of the emulator image
+    required: true
 runs:
   using: composite
   steps:
     - uses: reactivecircus/android-emulator-runner@v2
       with:
-        # Android 10: no background foreground-service limits, so the VPN service can be started
-        # without drawing the app window. A typed foreground service is only used from Android 14.
-        api-level: 29
+        # No app window is drawn (see scripts/android-e2e.sh): an app holding the VPN
+        # permission may start its service from the background on every Android version.
+        api-level: ${{ inputs.api-level }}
         arch: x86_64
         # AOSP image: no Google services eating the runner's CPU and memory.
         target: default

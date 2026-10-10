@@ -233,6 +233,7 @@ jobs:
           singbox: ${{ runner.temp }}/sing-box-1.12.0-linux-amd64/sing-box
           config: ${{ runner.temp }}/session.json
           emulator-log: ${{ runner.temp }}/emu-logcat.txt
+          api-level: '34'
       - name: End-to-end test on the emulator (attempt 2)
         id: e2e2
         if: steps.e2e1.outcome == 'failure'
@@ -244,6 +245,7 @@ jobs:
           singbox: ${{ runner.temp }}/sing-box-1.12.0-linux-amd64/sing-box
           config: ${{ runner.temp }}/session.json
           emulator-log: ${{ runner.temp }}/emu-logcat.txt
+          api-level: '34'
       - name: End-to-end test on the emulator (attempt 3)
         id: e2e3
         if: steps.e2e1.outcome == 'failure' && steps.e2e2.outcome == 'failure'
@@ -255,6 +257,7 @@ jobs:
           singbox: ${{ runner.temp }}/sing-box-1.12.0-linux-amd64/sing-box
           config: ${{ runner.temp }}/session.json
           emulator-log: ${{ runner.temp }}/emu-logcat.txt
+          api-level: '34'
       - name: End-to-end result
         run: |
           echo "attempts: ${{ steps.e2e1.outcome }} / ${{ steps.e2e2.outcome }} / ${{ steps.e2e3.outcome }}"
@@ -263,3 +266,18 @@ jobs:
           else
             echo "the emulator test failed in all attempts"; exit 1
           fi
+      # Older systems differ (Android 10 cannot bind sockets to an interface, so the tunnel
+      # uses the user-space stack there). One attempt, informational: it never fails the job.
+      - name: End-to-end test on Android 10 (informational)
+        id: e2e29
+        continue-on-error: true
+        uses: ./.github/actions/emulator-e2e
+        with:
+          dir: ${{ steps.source.outputs.dir }}
+          apk: ${{ runner.temp }}/sun-vpn-debug.apk
+          singbox: ${{ runner.temp }}/sing-box-1.12.0-linux-amd64/sing-box
+          config: ${{ runner.temp }}/session.json
+          emulator-log: ${{ runner.temp }}/emu-logcat-29.txt
+          api-level: '29'
+      - name: Android 10 result
+        run: echo "Android 10 end-to-end outcome: ${{ steps.e2e29.outcome }}"
