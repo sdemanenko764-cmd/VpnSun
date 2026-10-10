@@ -6,7 +6,7 @@ name: Sun VPN Android release
 on:
   push:
     branches: [main, android-dev]
-    paths: [downloads/Sun-VPN-*-source.zip, .github/workflows/android-release.yml]
+    paths: [downloads/Sun-VPN-*-source.zip, .github/workflows/android-release.yml, .github/actions/**]
   workflow_dispatch:
 permissions:
   contents: write
@@ -199,6 +199,20 @@ jobs:
           tar -xzf "$RUNNER_TEMP/sb.tgz" -C "$RUNNER_TEMP"
           cargo run -q -p luma-core --example android_config -- "ss://$(printf 'aes-128-gcm:password' | base64 -w0)@10.0.2.2:8388#test" "$RUNNER_TEMP/session.json"
           "$RUNNER_TEMP/sing-box-1.12.0-linux-amd64/sing-box" check -c "$RUNNER_TEMP/session.json"
+      - name: Free disk space and memory for the emulator
+        env:
+          DIR: ${{ steps.source.outputs.dir }}
+        run: |
+          df -h / | tail -1
+          (cd "$DIR/src-tauri/gen/android" && ./gradlew --stop) > /dev/null 2>&1 || true
+          pkill -f GradleDaemon || true
+          pkill -f KotlinCompileDaemon || true
+          # The build is done and the APK is copied: drop everything the emulator does not need.
+          rm -rf "$DIR/target" "$DIR/node_modules" "$DIR/artifacts" "$DIR/src-tauri/gen/android/app/build" "$DIR/src-tauri/gen/android/.gradle"
+          rm -rf "$HOME/.gradle" "$HOME/.cargo/registry" "$HOME/go" "$HOME/.rustup/toolchains"/*/share/doc
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/local/lib/android/sdk/ndk
+          df -h / | tail -1
+          free -m | head -2
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
