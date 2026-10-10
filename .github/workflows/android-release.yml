@@ -1,0 +1,137 @@
+# Builds the Android APK from the published source archive on a Linux runner:
+# libbox (sing-box for Android) with gomobile, then the Tauri app, then signs,
+# inspects and publishes the APK next to the Windows builds.
+# Branch android-dev is used to iterate without touching the Windows releases.
+name: Sun VPN Android release
+on:
+  push:
+    branches: [main, android-dev]
+    paths: [downloads/Sun-VPN-*-source.zip, .github/workflows/android-release.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and unpack source archive
+        id: source
+        run: |
+          # Highest version by name (checkout gives every file the same mtime).
+          zip=$(ls downloads/Sun-VPN-*-source.zip | sed -E 's#.*/Sun-VPN-(.*)-source\.zip#\1 &#' | sort -V | tail -1 | cut -d' ' -f2)
+          expected=$(cut -d' ' -f1 "$zip.sha256")
+          actual=$(sha256sum "$zip" | cut -d' ' -f1)
+          [ "$actual" = "$expected" ] || { echo "Source archive SHA-256 mismatch"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/src"
+          unzip -q "$zip" -d "$RUNNER_TEMP/src"
+          dir="$RUNNER_TEMP/src/Sun-VPN"
+          version=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$dir/package.json")
+          [ "$(basename "$zip")" = "Sun-VPN-$version-source.zip" ] || { echo "Archive name does not match version $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          chmod +x "$dir/src-tauri/gen/android/gradlew" "$dir/scripts/build-libbox.sh"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Android SDK and NDK
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;28.0.13004108" > /dev/null
+          {
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            echo "ANDROID_SDK_ROOT=$ANDROID_HOME"
+            echo "NDK_HOME=$ANDROID_HOME/ndk/28.0.13004108"
+            echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.0.13004108"
+          } >> "$GITHUB_ENV"
+      - name: Frontend and core tests
+        working-directory: ${{ steps.source.outputs.dir }}
+        run: |
+          npm ci
+          npm test
+          cargo test --locked -p luma-core
+      - name: Build libbox (sing-box 1.12.0 for Android)
+        working-directory: ${{ steps.source.outputs.dir }}
+        run: ./scripts/build-libbox.sh
+      - name: Release signing
+        working-directory: ${{ steps.source.outputs.dir }}
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            store="$RUNNER_TEMP/release.jks"; pass="$KEYSTORE_PASSWORD"; alias="${KEY_ALIAS:-sunvpn}"
+            echo "Signing with the repository secret key"
+          else
+            store="$PWD/android-signing/sun-vpn-release.jks"; pass="sunvpn-public"; alias="sunvpn"
+            echo "Signing with the public project key (android-signing/README.txt)"
+          fi
+          {
+            echo "storeFile=$store"
+            echo "storePassword=$pass"
+            echo "keyAlias=$alias"
+            echo "keyPassword=$pass"
+          } > src-tauri/gen/android/keystore.properties
+      - name: Build APK
+        working-directory: ${{ steps.source.outputs.dir }}
+        run: |
+          # Mobile Tauri builds the app as a library: add the library crate types here
+          # (the Windows build keeps the plain rlib it has always used).
+          sed -i 's/crate-type = \["rlib"\]/crate-type = ["staticlib", "cdylib", "rlib"]/' src-tauri/Cargo.toml
+          grep -n 'crate-type' src-tauri/Cargo.toml
+          npx tauri android build --apk --target aarch64 --ci
+      - name: Inspect and sign-check the APK
+        id: apk
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          DIR: ${{ steps.source.outputs.dir }}
+        run: |
+          apk=$(find "$DIR/src-tauri/gen/android/app/build/outputs/apk" -name '*.apk' | head -1)
+          [ -n "$apk" ] || { echo "No APK produced"; exit 1; }
+          echo "APK: $apk ($(stat -c %s "$apk") bytes)"
+          bt="$ANDROID_HOME/build-tools/35.0.0"
+          "$bt/apksigner" verify --verbose --print-certs "$apk"
+          "$bt/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
+          grep -E "^package:|application-label:|sdkVersion|targetSdkVersion|uses-permission" "$RUNNER_TEMP/badging.txt"
+          grep -q "name='app.luma.desktop'" "$RUNNER_TEMP/badging.txt"
+          grep -q "versionName='$VERSION'" "$RUNNER_TEMP/badging.txt"
+          grep -q "android.permission.FOREGROUND_SERVICE" "$RUNNER_TEMP/badging.txt"
+          unzip -l "$apk" | grep -E "lib/arm64-v8a" | tee "$RUNNER_TEMP/libs.txt"
+          grep -q "libluma_vpn_lib.so" "$RUNNER_TEMP/libs.txt"
+          grep -q "libbox.so" "$RUNNER_TEMP/libs.txt"
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"
+      - name: Publish APK
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          APK: ${{ steps.apk.outputs.apk }}
+        run: |
+          name="Sun-VPN-$VERSION-Android-arm64.apk"
+          cp "$APK" "downloads/$name"
+          (cd downloads && sha256sum "$name" > "$name.sha256" && cat "$name.sha256")
+          git config user.name 'Sun VPN release automation'
+          git config user.email 'sun-vpn-build@users.noreply.github.com'
+          git add downloads
+          git commit -m "Publish Sun VPN $VERSION Android APK (built on ubuntu-latest, unsigned by Google Play)"
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && exit 0
+            sleep $((attempt * 7))
+          done
+          echo "Could not push the APK"; exit 1

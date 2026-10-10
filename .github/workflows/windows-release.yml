@@ -145,4 +145,13 @@ jobs:
           git config user.email 'sun-vpn-build@users.noreply.github.com'
           git add downloads
           git commit -m "Publish Sun VPN $env:VERSION Windows binaries (built on windows-latest, MSVC)"
-          git push origin "HEAD:$env:GITHUB_REF_NAME"
+          # The Android workflow pushes to the same branch: rebase and retry.
+          for ($i = 1; $i -le 5; $i++) {
+            git pull --rebase origin $env:GITHUB_REF_NAME
+            if ($LASTEXITCODE -eq 0) {
+              git push origin "HEAD:$env:GITHUB_REF_NAME"
+              if ($LASTEXITCODE -eq 0) { exit 0 }
+            }
+            Start-Sleep -Seconds (7 * $i)
+          }
+          throw 'Could not push the Windows binaries'
