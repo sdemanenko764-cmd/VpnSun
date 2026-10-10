@@ -211,7 +211,14 @@ jobs:
           arch: x86_64
           target: google_apis
           force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          ram-size: 4096M
+          heap-size: 576M
+          disk-size: 8192M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -logcat '*:V' -logcat-output /home/runner/work/_temp/emu-logcat.txt
           disable-animations: true
           working-directory: ${{ steps.source.outputs.dir }}
-          script: timeout 1500 ./scripts/android-e2e.sh ${{ runner.temp }}/sun-vpn-debug.apk ${{ runner.temp }}/sing-box-1.12.0-linux-amd64/sing-box ${{ runner.temp }}/session.json
+          script: EMU_LOGCAT=/home/runner/work/_temp/emu-logcat.txt timeout 1500 ./scripts/android-e2e.sh ${{ runner.temp }}/sun-vpn-debug.apk ${{ runner.temp }}/sing-box-1.12.0-linux-amd64/sing-box ${{ runner.temp }}/session.json
+      - name: Emulator log (on failure)
+        if: failure()
+        run: |
+          [ -f "$RUNNER_TEMP/emu-logcat.txt" ] && tail -300 "$RUNNER_TEMP/emu-logcat.txt" || echo "no emulator log"
