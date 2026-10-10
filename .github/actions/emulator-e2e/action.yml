@@ -21,16 +21,16 @@ runs:
   steps:
     - uses: reactivecircus/android-emulator-runner@v2
       with:
-        api-level: 34
+        # Android 10: no background foreground-service limits, so the VPN service can be started
+        # without drawing the app window. A typed foreground service is only used from Android 14.
+        api-level: 29
         arch: x86_64
         # AOSP image: no Google services eating the runner's CPU and memory.
         target: default
         ram-size: 4096M
         heap-size: 576M
         disk-size: 8192M
-        # The host renderer (swiftshader_indirect) segfaults in RenderThread as soon as the
-        # app's WebView draws; the guest-side software renderer avoids it.
-        emulator-options: -no-window -gpu guest -no-snapshot -noaudio -no-boot-anim -feature -Vulkan -logcat '*:V' -logcat-output ${{ inputs.emulator-log }}
+        emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -feature -Vulkan -logcat '*:V' -logcat-output ${{ inputs.emulator-log }}
         disable-animations: true
         working-directory: ${{ inputs.dir }}
         script: EMU_LOGCAT=${{ inputs.emulator-log }} timeout 1500 ./scripts/android-e2e.sh ${{ inputs.apk }} ${{ inputs.singbox }} ${{ inputs.config }}
