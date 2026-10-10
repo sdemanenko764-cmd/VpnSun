@@ -141,7 +141,7 @@ jobs:
   # x86_64 debug build of the identical code (the release APK is arm64).
   emulator:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Verify and unpack source archive
