@@ -23,11 +23,12 @@ runs:
       with:
         api-level: 34
         arch: x86_64
-        target: google_apis
+        # AOSP image: no Google services eating the runner's CPU and memory.
+        target: default
         ram-size: 4096M
         heap-size: 576M
         disk-size: 8192M
-        emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -logcat '*:V' -logcat-output ${{ inputs.emulator-log }}
+        emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -feature -Vulkan -logcat '*:V' -logcat-output ${{ inputs.emulator-log }}
         disable-animations: true
         working-directory: ${{ inputs.dir }}
         script: EMU_LOGCAT=${{ inputs.emulator-log }} timeout 1500 ./scripts/android-e2e.sh ${{ inputs.apk }} ${{ inputs.singbox }} ${{ inputs.config }}
