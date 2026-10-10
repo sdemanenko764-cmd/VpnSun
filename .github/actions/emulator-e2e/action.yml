@@ -1,0 +1,33 @@
+name: Emulator end-to-end attempt
+description: Boots a fresh Android emulator and runs scripts/android-e2e.sh (one attempt).
+inputs:
+  dir:
+    description: Source directory (contains scripts/android-e2e.sh)
+    required: true
+  apk:
+    description: Debug APK to test
+    required: true
+  singbox:
+    description: sing-box binary for the host-side Shadowsocks server
+    required: true
+  config:
+    description: sing-box config the app runs
+    required: true
+  emulator-log:
+    description: File for the emulator-side guest log
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: 34
+        arch: x86_64
+        target: google_apis
+        ram-size: 4096M
+        heap-size: 576M
+        disk-size: 8192M
+        emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -logcat '*:V' -logcat-output ${{ inputs.emulator-log }}
+        disable-animations: true
+        working-directory: ${{ inputs.dir }}
+        script: EMU_LOGCAT=${{ inputs.emulator-log }} timeout 1500 ./scripts/android-e2e.sh ${{ inputs.apk }} ${{ inputs.singbox }} ${{ inputs.config }}
